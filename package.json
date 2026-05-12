@@ -1,0 +1,18 @@
+{
+  "name": "email-validator",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev -w @email-validator/api\" \"npm run dev -w @email-validator/worker\" \"npm run dev -w @email-validator/frontend\"",
+    "build": "npm run build -ws",
+    "typecheck": "npm run typecheck -ws"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.3"
+  }
+}
