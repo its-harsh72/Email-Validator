@@ -183,6 +183,50 @@ function randomMailbox(domain: string): string {
   return `probe-${token}@${domain}`;
 }
 
+function extractErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    if (error.message.trim().length > 0) {
+      return error.message;
+    }
+
+    const errorWithCode = error as Error & { code?: string; errno?: number | string };
+    if (errorWithCode.code) {
+      return `SMTP error (${String(errorWithCode.code)})`;
+    }
+    if (errorWithCode.errno !== undefined) {
+      return `SMTP error (errno ${String(errorWithCode.errno)})`;
+    }
+  }
+
+  return "Unknown SMTP error";
+}
+
+function classifyTransportFailure(message: string): string {
+  const normalized = message.toUpperCase();
+
+  if (
+    normalized.includes("ETIMEDOUT") ||
+    normalized.includes("SMTP CONNECTION TIMEOUT") ||
+    normalized.includes("SMTP READ TIMEOUT")
+  ) {
+    return "SMTP probe timed out. Outbound SMTP traffic might be blocked by your network/cloud provider.";
+  }
+
+  if (
+    normalized.includes("ECONNREFUSED") ||
+    normalized.includes("EHOSTUNREACH") ||
+    normalized.includes("ENETUNREACH")
+  ) {
+    return "SMTP host could not be reached from this environment.";
+  }
+
+  if (normalized.includes("EACCES") || normalized.includes("EPERM")) {
+    return "SMTP probe blocked by local permissions or firewall policy.";
+  }
+
+  return "SMTP probe failed due to network/server behavior.";
+}
+
 async function closeSocketQuietly(socket: net.Socket | tls.TLSSocket): Promise<void> {
   await new Promise<void>((resolve) => {
     if (socket.destroyed) {
@@ -322,14 +366,15 @@ async function tryHost(input: SmtpValidationInput, host: string): Promise<SmtpCh
         : "Recipient accepted by SMTP server."
     };
   } catch (error) {
+    const responseMessage = extractErrorMessage(error);
     return {
       status: "unknown",
       acceptedRecipient: false,
-      responseMessage: error instanceof Error ? error.message : "Unknown SMTP error",
+      responseMessage,
       hostTried: host,
       usedStartTls,
       catchAllLikely: false,
-      reason: "SMTP probe failed due to network/server behavior."
+      reason: classifyTransportFailure(responseMessage)
     };
   } finally {
     if (socket) {
@@ -361,6 +406,16 @@ export async function validateSmtp(input: SmtpValidationInput): Promise<SmtpChec
     if (result.status === "valid" || result.status === "invalid" || result.status === "risky") {
       return result;
     }
+
+    // Timeout errors usually indicate environment-level SMTP egress blocking,
+    // so trying additional MX hosts rarely changes outcome and only adds latency.
+    if (
+      result.responseMessage &&
+      result.responseMessage.toUpperCase().includes("TIMEOUT")
+    ) {
+      return result;
+    }
+
     latestUnknown = result;
   }
 
